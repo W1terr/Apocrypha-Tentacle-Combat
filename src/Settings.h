@@ -12,6 +12,7 @@ namespace Settings
 		float strikePauseMin{ 0.5f };     // seconds it sways between strikes
 		float strikePauseMax{ 1.5f };
 		float damageMult{ 1.0f };         // x the vanilla leveled damage (100 - 350)
+		float maxHitPercent{ 35.0f };     // one hit takes at most this much of your max health (after armor, difficulty...); 0 = no cap
 		bool  disease{ true };            // vanilla trap disease chance (2.5 %)
 		bool  verboseLog{ false };
 	};

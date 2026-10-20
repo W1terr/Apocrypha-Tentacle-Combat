@@ -13,7 +13,7 @@ add_rules("mode.debug", "mode.releasedbg")
 
 -- define targets
 target("TentacleCombat")
-    set_version("1.1.1")
+    set_version("1.2.0")
     add_rules("commonlibsse-ng.plugin", {
         name = "TentacleCombat",
         author = "W1ter",

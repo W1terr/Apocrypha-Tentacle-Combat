@@ -88,11 +88,12 @@ namespace Settings
 		Number(table, "tentacles.fstrikepausemax", values.strikePauseMax, 0.0f, 10.0f);
 		values.strikePauseMax = std::max(values.strikePauseMax, values.strikePauseMin);
 		Number(table, "tentacles.fdamagemult", values.damageMult, 0.0f, 10.0f);
+		Number(table, "tentacles.fmaxhitpercent", values.maxHitPercent, 0.0f, 100.0f);
 		Flag(table, "tentacles.bdisease", values.disease);
 		Flag(table, "debug.bverboselog", values.verboseLog);
-		logs::info("Settings: engage {:.0f}, retreat {:.0f}, turn {:.0f} deg, pause {:.1f}-{:.1f} s, damage x{:.2f}, disease {}",
+		logs::info("Settings: engage {:.0f}, retreat {:.0f}, turn {:.0f} deg, pause {:.1f}-{:.1f} s, damage x{:.2f}, max hit {:.0f}%, disease {}",
 			values.engageDistance, values.retreatDistance, values.turnLimit, values.strikePauseMin, values.strikePauseMax,
-			values.damageMult, values.disease);
+			values.damageMult, values.maxHitPercent, values.disease);
 	}
 
 	const Values& Get() { return values; }

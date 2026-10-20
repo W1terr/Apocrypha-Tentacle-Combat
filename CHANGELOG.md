@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2
+
+- One strike takes at most 35% of your max health (`fMaxHitPercent` in the INI, 0 = vanilla damage as it is). The
+  cap counts what really comes through after armor, blocking, difficulty and combat overhauls, so a high level
+  character on Legendary is no longer nearly one-shot.
+
 ## 1.1.1
 
 First release.

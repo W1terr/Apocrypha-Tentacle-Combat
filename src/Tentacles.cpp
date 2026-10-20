@@ -112,6 +112,21 @@ namespace Tentacles
 		float                                       scanTimer{ 0.0f };
 		float                                       lastDelta{ 1.0f / 60.0f };
 
+		// A strike's damage goes through the engine (armor, blocking, difficulty, perks, overhauls) after the Papyrus
+		// call queued it, so the health you really lose is only known a moment later. Each landed hit teaches how much
+		// of the damage we send comes through; the next hit is sized so it takes at most fMaxHitPercent of your max
+		// health, and anything above that is given back once the hit lands.
+		struct HitCheck
+		{
+			bool  active{ false };
+			float health{ 0.0f };  // your health when the strike connected
+			float sent{ 0.0f };    // damage handed to ProcessTrapHit
+			float cap{ 0.0f };     // the most it may take
+			float waited{ 0.0f };
+		};
+		HitCheck hitCheck;
+		float    throughput{ -1.0f };  // health lost per point of damage sent (learned; < 0 = not yet)
+
 		bool Verbose() { return Settings::Get().verboseLog; }
 
 		const char* Name(State a_state)
@@ -330,6 +345,81 @@ namespace Tentacles
 			return damage[step] * Settings::Get().damageMult;
 		}
 
+		float Health(RE::Actor* a_actor) { return a_actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kHealth); }
+
+		// before the first landed hit: the vanilla damage multiplier of the difficulty (no armor = the most it can be)
+		float DifficultyMult(RE::PlayerCharacter* a_player)
+		{
+			static constexpr std::array<const char*, 6> names{ "fDiffMultHPToPCVE", "fDiffMultHPToPCE", "fDiffMultHPToPCN",
+				"fDiffMultHPToPCH", "fDiffMultHPToPCVH", "fDiffMultHPToPCL" };
+			const auto difficulty = a_player->GetGameStatsData().difficulty;
+			auto* const settings = RE::GameSettingCollection::GetSingleton();
+			if (settings && difficulty >= 0 && difficulty < static_cast<std::int32_t>(names.size())) {
+				if (auto* setting = settings->GetSetting(names[static_cast<std::size_t>(difficulty)]); setting) {
+					return std::max(setting->GetFloat(), 0.1f);
+				}
+			}
+			return 1.0f;
+		}
+
+		// the damage to send for a strike: the leveled damage, lowered when it would take more than the cap
+		float StrikeDamage(const Player& a_player, float& a_cap)
+		{
+			const float damage = Damage(a_player);
+			const float percent = Settings::Get().maxHitPercent;
+			a_cap = 0.0f;
+			if (percent <= 0.0f || percent >= 100.0f) {
+				return damage;
+			}
+			a_cap = a_player.actor->GetActorValueMax(RE::ActorValue::kHealth) * percent * 0.01f;
+			if (throughput < 0.0f) {
+				throughput = DifficultyMult(a_player.actor);
+			}
+			return a_cap > 0.0f && damage * throughput > a_cap ? a_cap / throughput : damage;
+		}
+
+		void WatchHit(float a_health, float a_sent, float a_cap)
+		{
+			if (a_cap <= 0.0f) {
+				return;
+			}
+			if (hitCheck.active) {
+				// two strikes at once: one check for both
+				hitCheck.sent += a_sent;
+				hitCheck.cap += a_cap;
+				return;
+			}
+			hitCheck = { true, a_health, a_sent, a_cap, 0.0f };
+		}
+
+		void CheckHit(RE::PlayerCharacter* a_actor, float a_delta)
+		{
+			if (!hitCheck.active) {
+				return;
+			}
+			hitCheck.waited += a_delta;
+			const float lost = hitCheck.health - Health(a_actor);
+			if (lost < 0.5f && hitCheck.waited < 1.0f) {
+				return;  // not landed yet
+			}
+			hitCheck.active = false;
+			if (lost < 0.5f) {
+				return;  // took nothing (invulnerable, absorbed ...): nothing to learn
+			}
+			// more armor or a block lowers it slowly (a blocked hit says little about the next), less raises it at once
+			const float seen = lost / std::max(hitCheck.sent, 1.0f);
+			throughput = throughput < 0.0f || seen > throughput ? seen : throughput + (seen - throughput) * 0.5f;
+			float back = 0.0f;
+			if (lost > hitCheck.cap + 1.0f && !a_actor->IsDead()) {
+				back = lost - hitCheck.cap;
+				a_actor->AsActorValueOwner()->RestoreActorValue(RE::ActorValue::kHealth, back);
+			}
+			if (Verbose()) {
+				logs::info("You lost {:.0f} health from {:.0f} damage (cap {:.0f}, gave back {:.0f}); {:.2f} of the damage comes through",
+					lost, hitCheck.sent, hitCheck.cap, back, throughput);
+			}
+		}
+
 		void CheckStrike(Tentacle& a_t, RE::TESObjectREFR* a_ref, const Player& a_player)
 		{
 			if (a_t.struck || !a_player.alive) {
@@ -345,7 +435,9 @@ namespace Tentacles
 				a_t.struck = true;
 				const NiPoint3 at = M::Lerp(a_t.joints[b], a_t.joints[b + 1], hit.s);
 				const NiPoint3 velocity = Velocity(a_t, b + 1);
-				const float    damage = Damage(a_player);
+				float          cap = 0.0f;
+				const float    damage = StrikeDamage(a_player, cap);
+				WatchHit(Health(a_player.actor), damage, cap);
 				Papyrus::CallMethod(static_cast<RE::TESObjectREFR*>(a_player.actor), "ProcessTrapHit", a_ref, damage, 0.0f,
 					velocity.x, velocity.y, velocity.z, at.x, at.y, at.z, static_cast<std::int32_t>(0), 0.0f);
 				PlayAt(Forms::Get().hit, at);
@@ -355,7 +447,7 @@ namespace Tentacles
 					a_player.actor->AddSpell(diseases[static_cast<std::size_t>(M::Random(0.0f, static_cast<float>(diseases.size()) - 0.01f))]);
 				}
 				if (Verbose()) {
-					logs::info("Tentacle {:X} hit you for {:.0f} (bone {})", a_t.id, damage, b);
+					logs::info("Tentacle {:X} hit you for {:.0f} of {:.0f} (bone {})", a_t.id, damage, Damage(a_player), b);
 				}
 				return;
 			}
@@ -845,6 +937,8 @@ namespace Tentacles
 		Severed::Reset();
 		meleePending = false;
 		scanTimer = 0.0f;
+		hitCheck = {};
+		throughput = -1.0f;
 		std::scoped_lock lock(eventLock);
 		loadedEvents.clear();
 		hitEvents.clear();
@@ -910,6 +1004,7 @@ namespace Tentacles
 				Scan(actor);
 			}
 		}
+		CheckHit(actor, a_delta);
 		if (tracked.empty()) {
 			Severed::Update(a_delta);
 			meleePending = false;
